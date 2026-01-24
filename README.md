@@ -53,21 +53,22 @@ If you already have a `.venv` folder and want a fresh start, remove it first.
 
 ```bash
 rm -rf .venv
+deactivate # to deactivate the in memory venv
 ```
 
 1. Create and activate a virtual environment
 
 - Create the venv:
 
-  ```bash
+```bash
   python -m venv .venv
-  ```
+```
 
 - Activate:
 
-  ```bash
+```bash
   source .venv/Scripts/activate
-  ```
+```
 
 After activation your prompt should show `(.venv)`.
 

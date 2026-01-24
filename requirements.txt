@@ -1,0 +1,8 @@
+
+PyGithub
+python-dateutil
+python-dotenv
+requests
+openai
+notion-client
+slack-sdk

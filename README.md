@@ -4,10 +4,12 @@ This small collection of scripts helps you collect GitHub activity statistics fo
 
 ## Files
 
-- `gh_utils.py` - helper functions for GitHub authentication and date parsing
-- `reviews_report.py` - collect stats about reviews you made in a date range
-- `prs_report.py` - collect stats about PRs you created in a date range
-- `weekly_report.py` - aggregate weekly numbers and generate an AI summary; can post to Notion and Slack
+- In the `scripts/` folder
+  - `gh_utils.py` - helper functions for GitHub authentication and date parsing
+  - `reviews_report.py` - collect stats about reviews you made in a date range
+  - `prs_report.py` - collect stats about PRs you created in a date range
+  - `weekly_report.py` - aggregate weekly numbers and generate an AI summary; can post to Notion and Slack
+
 - `requirements.txt` - Python dependencies
 
 ## Environment variables

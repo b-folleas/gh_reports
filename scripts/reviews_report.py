@@ -22,7 +22,7 @@ from typing import Dict, List, Optional
 import requests
 from dotenv import load_dotenv
 
-from gh_utils import (
+from scripts.gh_utils import (
     get_github_client,
     parse_date_range,
     get_authenticated_username,

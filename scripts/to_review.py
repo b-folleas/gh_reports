@@ -1,4 +1,4 @@
-"""List open PRs where your review is requested, grouped by repo, with a priority score.
+"""List open PRs where your review is requested, as a single priority-sorted table.
 
 Usage:
     python to_review.py [--priority-repos org/repo1,org/repo2]
@@ -18,7 +18,7 @@ import argparse
 import math
 import os
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -26,11 +26,25 @@ from gh_utils import get_github_client, get_authenticated_username
 
 load_dotenv()
 
+# ANSI colors
+_RESET   = "\033[0m"
+_BOLD    = "\033[1m"
+_DIM     = "\033[2m"
+_RED     = "\033[1;31m"
+_YELLOW  = "\033[33m"
+_GREEN   = "\033[32m"
+_CYAN    = "\033[36m"
+_MAGENTA = "\033[1;35m"
+
+
+def _c(code: str, text: str) -> str:
+    return f"{code}{text}{_RESET}"
+
 
 def fetch_prs_to_review(g, username: str):
     """Return open PRs where `username` has been requested to review."""
     query = f"type:pr user-review-requested:{username} is:open"
-    print(f"Fetching PRs with query: {query}")
+    print(_c(_DIM, f"Fetching PRs with query: {query}"))
     return g.search_issues(query)
 
 
@@ -56,19 +70,19 @@ def compute_priority_score(
     return round(score, 1)
 
 
-def collect_pr_data(
-    issues, g, priority_repos: List[str]
-) -> Dict[str, List[dict]]:
-    """Build a per-repo dict of PR metadata, sorted by priority score."""
+def collect_pr_data(issues, g, priority_repos: List[str]) -> List[dict]:
+    """Build a flat list of PR metadata sorted by priority score descending."""
     now = datetime.now(timezone.utc)
-    by_repo: Dict[str, List[dict]] = {}
+    entries = []
 
     for issue in issues:
         repo_name = issue.repository.full_name
         repo = g.get_repo(repo_name)
         pr = repo.get_pull(issue.number)
 
-        staling_days = (now - pr.updated_at).days
+        delta = now - pr.updated_at
+        staling_days = delta.days
+        staling_seconds = delta.total_seconds()
         is_priority = repo_name in priority_repos
         lines_changed = pr.additions + pr.deletions
 
@@ -76,89 +90,117 @@ def collect_pr_data(
             staling_days, is_priority, pr.changed_files, lines_changed
         )
 
-        by_repo.setdefault(repo_name, []).append(
-            {
-                "title": pr.title,
-                "url": pr.html_url,
-                "author": pr.user.login if pr.user else "unknown",
-                "files_changed": pr.changed_files,
-                "additions": pr.additions,
-                "deletions": pr.deletions,
-                "staling_days": staling_days,
-                "is_priority": is_priority,
-                "priority_score": score,
-            }
-        )
+        entries.append({
+            "repo": repo_name,
+            "title": pr.title,
+            "url": pr.html_url,
+            "author": pr.user.login if pr.user else "unknown",
+            "files_changed": pr.changed_files,
+            "additions": pr.additions,
+            "deletions": pr.deletions,
+            "staling_seconds": staling_seconds,
+            "staling_days": staling_days,
+            "is_priority": is_priority,
+            "priority_score": score,
+        })
 
-    for entries in by_repo.values():
-        entries.sort(key=lambda e: e["priority_score"], reverse=True)
+    entries.sort(key=lambda e: e["priority_score"], reverse=True)
+    for i, e in enumerate(entries, 1):
+        e["rank"] = i
 
-    return by_repo
+    return entries
 
 
-def format_report(by_repo: Dict[str, List[dict]]) -> str:
-    """Return a plain-text report grouped by repo, sorted by priority."""
-    if not by_repo:
-        return "No PRs awaiting your review."
+def _fmt_staling(staling_seconds: float) -> str:
+    if staling_seconds < 3600:
+        return f"{int(staling_seconds / 60)}m"
+    if staling_seconds < 86400:
+        return f"{int(staling_seconds / 3600)}h"
+    return f"{int(staling_seconds / 86400)}d"
 
-    COL_TITLE = 40
-    COL_AUTHOR = 18
-    COL_FILES = 7
-    COL_LINES = 12
-    COL_STALING = 8
-    COL_SCORE = 7
-    SEP_WIDTH = COL_TITLE + COL_AUTHOR + COL_FILES + COL_LINES + COL_STALING + COL_SCORE + 6
 
-    total = sum(len(v) for v in by_repo.values())
-    lines = [
-        "PRs to review",
-        "=" * SEP_WIDTH,
-        f"Total: {total} open PR(s) awaiting your review",
-        "",
-    ]
+def format_report(entries: List[dict]) -> str:
+    """Return a colored plain-text report as a single priority-sorted table."""
+    if not entries:
+        return _c(_YELLOW, "No PRs awaiting your review.")
 
-    def repo_sort_key(item):
-        _, entries = item
-        return (
-            not any(e["is_priority"] for e in entries),
-            -max(e["priority_score"] for e in entries),
-        )
+    C_RANK  = 3
+    C_PROJ  = 22
+    C_TITLE = 32
+    C_AUTH  = 15
+    C_FILES = 5
+    C_LINES = 12
+    C_STAL  = 6
+    C_SCORE = 6
+    SEP = C_RANK + C_PROJ + C_TITLE + C_AUTH + C_FILES + C_LINES + C_STAL + C_SCORE + 7
+
+    total = len(entries)
+    out = []
+    out.append("")
+    out.append(_c(_BOLD, f"  PRs to review  —  {total} open PR(s) awaiting your review"))
+    out.append("─" * SEP)
 
     header = (
-        f"{'Title':<{COL_TITLE}} "
-        f"{'Author':<{COL_AUTHOR}} "
-        f"{'Files':>{COL_FILES}} "
-        f"{'±Lines':>{COL_LINES}} "
-        f"{'Staling':>{COL_STALING}} "
-        f"{'Score':>{COL_SCORE}}"
+        f"{'#':>{C_RANK}} "
+        f"{'Project':<{C_PROJ}} "
+        f"{'Title':<{C_TITLE}} "
+        f"{'Author':<{C_AUTH}} "
+        f"{'Files':>{C_FILES}} "
+        f"{'±Lines':>{C_LINES}} "
+        f"{'Stale':>{C_STAL}} "
+        f"{'Score':>{C_SCORE}}"
     )
+    out.append(_c(_BOLD, header))
+    out.append("─" * SEP)
 
-    for repo_name, entries in sorted(by_repo.items(), key=repo_sort_key):
-        priority_tag = " [PRIORITY]" if any(e["is_priority"] for e in entries) else ""
-        lines.append(f"## {repo_name}{priority_tag}  ({len(entries)} PR(s))")
-        lines.append("-" * SEP_WIDTH)
-        lines.append(header)
-        lines.append("-" * SEP_WIDTH)
+    for e in entries:
+        rank = f"{e['rank']:>{C_RANK}}"
 
-        for e in entries:
-            title = e["title"]
-            if len(title) > COL_TITLE - 1:
-                title = title[: COL_TITLE - 2] + "…"
-            lines_delta = f"+{e['additions']}/-{e['deletions']}"
-            row = (
-                f"{title:<{COL_TITLE}} "
-                f"{e['author']:<{COL_AUTHOR}} "
-                f"{e['files_changed']:>{COL_FILES}} "
-                f"{lines_delta:>{COL_LINES}} "
-                f"{e['staling_days']:>{COL_STALING}}d "
-                f"{e['priority_score']:>{COL_SCORE}}"
-            )
-            lines.append(row)
-            lines.append(f"  {e['url']}")
+        proj_raw = e["repo"].split("/")[-1]
+        if len(proj_raw) > C_PROJ - 1:
+            proj_raw = proj_raw[:C_PROJ - 2] + "…"
+        proj = f"{proj_raw:<{C_PROJ}}"
+        if e["is_priority"]:
+            proj = _c(_MAGENTA, proj)
 
-        lines.append("")
+        title_raw = e["title"]
+        if len(title_raw) > C_TITLE - 1:
+            title_raw = title_raw[:C_TITLE - 2] + "…"
+        title = f"{title_raw:<{C_TITLE}}"
 
-    return "\n".join(lines)
+        author_raw = e["author"]
+        if len(author_raw) > C_AUTH - 1:
+            author_raw = author_raw[:C_AUTH - 2] + "…"
+        author = f"{author_raw:<{C_AUTH}}"
+
+        files = f"{e['files_changed']:>{C_FILES}}"
+
+        lines_raw = f"+{e['additions']}/-{e['deletions']}"
+        lines = f"{lines_raw:>{C_LINES}}"
+
+        staling_str = _fmt_staling(e["staling_seconds"])
+        staling = f"{staling_str:>{C_STAL}}"
+        if e["staling_days"] >= 7:
+            staling = _c(_RED, staling)
+        elif e["staling_days"] >= 3 or e["staling_seconds"] >= 86400:
+            staling = _c(_YELLOW, staling)
+        else:
+            staling = _c(_GREEN, staling)
+
+        score_val = e["priority_score"]
+        score = f"{score_val:>{C_SCORE}}"
+        if score_val >= 20:
+            score = _c(_RED, score)
+        elif score_val >= 10:
+            score = _c(_YELLOW, score)
+        else:
+            score = _c(_GREEN, score)
+
+        out.append(f"{rank} {proj} {title} {author} {files} {lines} {staling} {score}")
+        out.append(_c(_DIM + _CYAN, f"{'':>{C_RANK}}   ↳ {e['url']}"))
+
+    out.append("─" * SEP)
+    return "\n".join(out)
 
 
 def main(priority_repos_arg: Optional[str]):
@@ -168,11 +210,11 @@ def main(priority_repos_arg: Optional[str]):
 
     g = get_github_client()
     username = get_authenticated_username(g)
-    print(f"Fetching PRs to review for: {username}\n")
+    print(_c(_DIM, f"Fetching PRs to review for: {username}"))
 
     issues = fetch_prs_to_review(g, username)
-    by_repo = collect_pr_data(issues, g, priority_repos)
-    print(format_report(by_repo))
+    entries = collect_pr_data(issues, g, priority_repos)
+    print(format_report(entries))
 
 
 def parse_args() -> argparse.Namespace:

@@ -11,7 +11,7 @@ import os
 from typing import Optional
 
 import openai
-from scripts.gh_utils import get_github_client, parse_date_range, get_authenticated_username
+from gh_utils import get_github_client, parse_date_range, get_authenticated_username
 
 
 def collect_counts(g, username: str, start_dt: datetime, end_dt: datetime):

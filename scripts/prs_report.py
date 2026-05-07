@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from dotenv import load_dotenv
 
-from scripts.gh_utils import (
+from gh_utils import (
     get_github_client,
     parse_date_range,
     get_authenticated_username,
@@ -40,6 +40,7 @@ def fetch_pr_issues(
     start_s = start_dt.date().isoformat()
     end_s = end_dt.date().isoformat()
     query = f"type:pr author:{username} created:{start_s}..{end_s}"
+    print(f"Fetching PRs with query: {query}")
     return g.search_issues(query)
 
 
@@ -66,7 +67,7 @@ def process_pr_timings(
     merged_delta = None
 
     for r in pr.get_reviews():
-        # only consider reviews by others
+        # only consider reviews by other users
         if not (r.user and r.user.login != username):
             continue
         state = (r.state or "").upper()
@@ -243,8 +244,9 @@ def main(
 ):
     g = get_github_client()
     username = get_authenticated_username(g)
+    print(f"Generating PRs report for user: {username}")
     start_dt, end_dt = parse_date_range(start, end)
-
+    print(f"Date range: {start_dt.date().isoformat()} .. {end_dt.date().isoformat()}")
     issues = fetch_pr_issues(g, username, start_dt, end_dt)
     stats = aggregate_pr_stats(issues, g, username, start_dt, end_dt)
 

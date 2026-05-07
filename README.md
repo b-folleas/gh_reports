@@ -27,24 +27,40 @@ When you want to enable Notion posting later, set these vars and adjust the payl
 
 - For local testing you can create a `.env` file in the project root and load it with `python-dotenv` (a sample `.env.sample` is included).
 
+## Requirements
+
+- Python
+
+Install with homebrew
+
+```sh
+brew install python
+```
+
+Check installation
+
+```sh
+python3 --version
+```
+
 ### Quick run examples
 
 - Generate review stats:
 
 ```bash
-python ./reviews_report.py --start 2026-01-01 --end 2026-01-15
+python ./scripts/reviews_report.py --start 2026-01-01 --end 2026-01-15
 ```
 
 - Generate PR stats:
 
 ```bash
-python ./prs_report.py --start 2026-01-01 --end 2026-01-15
+python ./scripts/prs_report.py --start 2026-01-01 --end 2026-01-15
 ```
 
 - Generate weekly report (defaults to last 7 days):
 
 ```bash
-python ./weekly_report.py
+python ./scripts/weekly_report.py
 ```
 
 ### Local development (using `venv`)
@@ -68,6 +84,12 @@ deactivate # to deactivate the in memory venv
 
 - Activate:
 
+MacOS / Linux:
+```sh
+source .venv/bin/activate
+```
+
+Windows:
 ```bash
   source .venv/Scripts/activate
 ```

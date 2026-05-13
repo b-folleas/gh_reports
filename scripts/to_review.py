@@ -17,6 +17,7 @@ Environment variables:
 import argparse
 import math
 import os
+import unicodedata
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -39,6 +40,36 @@ _MAGENTA = "\033[1;35m"
 
 def _c(code: str, text: str) -> str:
     return f"{code}{text}{_RESET}"
+
+
+def _display_width(s: str) -> int:
+    """Return the number of terminal columns occupied by string s."""
+    w = 0
+    for ch in s:
+        eaw = unicodedata.east_asian_width(ch)
+        w += 2 if eaw in ("W", "F") else 1
+    return w
+
+
+def _fit(s: str, width: int, align: str = "<") -> str:
+    """Truncate s to fit in `width` display columns, then pad to exactly `width`."""
+    dw = _display_width(s)
+    if dw > width:
+        # Trim character by character until we have room for the ellipsis
+        truncated = []
+        used = 0
+        for ch in s:
+            cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+            if used + cw > width - 1:
+                break
+            truncated.append(ch)
+            used += cw
+        s = "".join(truncated) + "…"
+        dw = used + 1  # "…" is always 1 column wide
+    pad = width - dw
+    if align == ">":
+        return " " * pad + s
+    return s + " " * pad
 
 
 def fetch_prs_to_review(g, username: str):
@@ -154,24 +185,14 @@ def format_report(entries: List[dict]) -> str:
     out.append("─" * SEP)
 
     for e in entries:
-        rank = f"{e['rank']:>{C_RANK}}"
+        rank = _fit(str(e["rank"]), C_RANK, ">")
 
-        proj_raw = e["repo"].split("/")[-1]
-        if len(proj_raw) > C_PROJ - 1:
-            proj_raw = proj_raw[:C_PROJ - 2] + "…"
-        proj = f"{proj_raw:<{C_PROJ}}"
-        if e["is_priority"]:
-            proj = _c(_MAGENTA, proj)
+        proj_raw = _fit(e["repo"].split("/")[-1], C_PROJ)
+        proj = _c(_MAGENTA, proj_raw) if e["is_priority"] else proj_raw
 
-        title_raw = e["title"]
-        if len(title_raw) > C_TITLE - 1:
-            title_raw = title_raw[:C_TITLE - 2] + "…"
-        title = f"{title_raw:<{C_TITLE}}"
+        title = _fit(e["title"], C_TITLE)
 
-        author_raw = e["author"]
-        if len(author_raw) > C_AUTH - 1:
-            author_raw = author_raw[:C_AUTH - 2] + "…"
-        author = f"{author_raw:<{C_AUTH}}"
+        author = _fit(e["author"], C_AUTH)
 
         files = f"{e['files_changed']:>{C_FILES}}"
 

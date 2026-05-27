@@ -4,9 +4,9 @@ Usage:
     python to_review.py [--priority-repos org/repo1,org/repo2]
 
 Priority score:
-    staling_days * 2
+    staling_days * 3
     + 10 if the repo is in the priority list
-    + log2(files_changed + 1) * 2
+    + log2(files_changed + 1)
     + log2(lines_changed + 1)
     + 20 if only 1 reviewer requested
 
@@ -85,24 +85,33 @@ def compute_priority_score(
     is_priority: bool,
     files_changed: int,
     lines_changed: int,
-    num_reviewers: int = 0,
+    pending_count: int = 0,
+    total_reviewers: int = 0,
 ) -> float:
     """Return a numeric priority score (higher = more urgent to review).
 
     Components:
-        staling_days * 2
+        staling_days * 3
         + 10 if repo is in the priority list
-        + log2(files_changed + 1) * 2
+        + log2(files_changed + 1)
         + log2(lines_changed + 1)
-        + 20 if only 1 reviewer requested
+        + reviewer ratio bonus (when pending == 1):
+          - 10 if 1/1 (only reviewer)
+          - 5 if 1/2
+          - 2.5 if 1/3
+          - 1.25 if 1/4+
     """
-    score = staling_days * 2
+    score = staling_days * 3
     if is_priority:
         score += 10
-    score += math.log2(files_changed + 1) * 2
+    score += math.log2(files_changed + 1)
     score += math.log2(lines_changed + 1)
-    if num_reviewers == 1:
-        score += 20
+
+    # Reviewer ratio bonus: urgent if only one reviewer pending
+    if pending_count == 1 and total_reviewers > 0:
+        reviewer_bonus = 10 / (2 ** min(3, total_reviewers - 1))
+        score += reviewer_bonus
+
     return round(score, 1)
 
 
@@ -134,7 +143,8 @@ def collect_pr_data(issues, g, priority_repos: List[str]) -> List[dict]:
         pending_count = len(pending_reviewers)
 
         score = compute_priority_score(
-            staling_days, is_priority, pr.changed_files, lines_changed, pending_count
+            staling_days, is_priority, pr.changed_files, lines_changed,
+            pending_count, total_reviewers
         )
 
         entries.append({

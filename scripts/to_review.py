@@ -8,6 +8,7 @@ Priority score:
     + 10 if the repo is in the priority list
     + log2(files_changed + 1) * 2
     + log2(lines_changed + 1)
+    + 20 if only 1 reviewer requested
 
 Environment variables:
     GITHUB_TOKEN   (required)
@@ -84,6 +85,7 @@ def compute_priority_score(
     is_priority: bool,
     files_changed: int,
     lines_changed: int,
+    num_reviewers: int = 0,
 ) -> float:
     """Return a numeric priority score (higher = more urgent to review).
 
@@ -92,12 +94,15 @@ def compute_priority_score(
         + 10 if repo is in the priority list
         + log2(files_changed + 1) * 2
         + log2(lines_changed + 1)
+        + 20 if only 1 reviewer requested
     """
     score = staling_days * 2
     if is_priority:
         score += 10
     score += math.log2(files_changed + 1) * 2
     score += math.log2(lines_changed + 1)
+    if num_reviewers == 1:
+        score += 20
     return round(score, 1)
 
 
@@ -117,8 +122,19 @@ def collect_pr_data(issues, g, priority_repos: List[str]) -> List[dict]:
         is_priority = repo_name in priority_repos
         lines_changed = pr.additions + pr.deletions
 
+        # Count reviewers: pending (requested) and already reviewed
+        # Exclude bot/AI reviewers from count (they don't affect merge requirements)
+        pending_reviewers = set(
+            r.login for r in pr.requested_reviewers if r.type != "Bot"
+        )
+        reviewed_by = set(
+            r.user.login for r in pr.get_reviews() if r.user and r.user.type != "Bot"
+        )
+        total_reviewers = len(pending_reviewers | reviewed_by)
+        pending_count = len(pending_reviewers)
+
         score = compute_priority_score(
-            staling_days, is_priority, pr.changed_files, lines_changed
+            staling_days, is_priority, pr.changed_files, lines_changed, pending_count
         )
 
         entries.append({
@@ -133,6 +149,8 @@ def collect_pr_data(issues, g, priority_repos: List[str]) -> List[dict]:
             "staling_days": staling_days,
             "is_priority": is_priority,
             "priority_score": score,
+            "pending_reviewers": pending_count,
+            "total_reviewers": total_reviewers,
         })
 
     entries.sort(key=lambda e: e["priority_score"], reverse=True)
@@ -161,9 +179,10 @@ def format_report(entries: List[dict]) -> str:
     C_AUTH  = 15
     C_FILES = 5
     C_LINES = 12
+    C_REVS  = 5
     C_STAL  = 6
     C_SCORE = 6
-    SEP = C_RANK + C_PROJ + C_TITLE + C_AUTH + C_FILES + C_LINES + C_STAL + C_SCORE + 7
+    SEP = C_RANK + C_PROJ + C_TITLE + C_AUTH + C_FILES + C_LINES + C_REVS + C_STAL + C_SCORE + 8
 
     total = len(entries)
     out = []
@@ -178,6 +197,7 @@ def format_report(entries: List[dict]) -> str:
         f"{'Author':<{C_AUTH}} "
         f"{'Files':>{C_FILES}} "
         f"{'±Lines':>{C_LINES}} "
+        f"{'Revs':>{C_REVS}} "
         f"{'Stale':>{C_STAL}} "
         f"{'Score':>{C_SCORE}}"
     )
@@ -199,6 +219,11 @@ def format_report(entries: List[dict]) -> str:
         lines_raw = f"+{e['additions']}/-{e['deletions']}"
         lines = f"{lines_raw:>{C_LINES}}"
 
+        revs_str = f"{e['pending_reviewers']}/{e['total_reviewers']}"
+        revs = f"{revs_str:>{C_REVS}}"
+        if e["total_reviewers"] == 1:
+            revs = _c(_RED, revs)
+
         staling_str = _fmt_staling(e["staling_seconds"])
         staling = f"{staling_str:>{C_STAL}}"
         if e["staling_days"] >= 7:
@@ -217,7 +242,7 @@ def format_report(entries: List[dict]) -> str:
         else:
             score = _c(_GREEN, score)
 
-        out.append(f"{rank} {proj} {title} {author} {files} {lines} {staling} {score}")
+        out.append(f"{rank} {proj} {title} {author} {files} {lines} {revs} {staling} {score}")
         out.append(_c(_DIM + _CYAN, f"{'':>{C_RANK}}   ↳ {e['url']}"))
 
     out.append("─" * SEP)

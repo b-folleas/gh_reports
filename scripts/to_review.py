@@ -190,9 +190,9 @@ def format_report(entries: List[dict]) -> str:
     C_FILES = 5
     C_LINES = 12
     C_REVS  = 5
-    C_STAL  = 6
+    C_STALE = 6
     C_SCORE = 6
-    SEP = C_RANK + C_PROJ + C_TITLE + C_AUTH + C_FILES + C_LINES + C_REVS + C_STAL + C_SCORE + 8
+    SEP = C_RANK + C_PROJ + C_TITLE + C_AUTH + C_FILES + C_LINES + C_REVS + C_STALE + C_SCORE + 8
 
     total = len(entries)
     out = []
@@ -207,8 +207,8 @@ def format_report(entries: List[dict]) -> str:
         f"{'Author':<{C_AUTH}} "
         f"{'Files':>{C_FILES}} "
         f"{'±Lines':>{C_LINES}} "
-        f"{'Revs':>{C_REVS}} "
-        f"{'Stale':>{C_STAL}} "
+        f"{'Reviewers':>{C_REVS}} "
+        f"{'Stale':>{C_STALE}} "
         f"{'Score':>{C_SCORE}}"
     )
     out.append(_c(_BOLD, header))
@@ -235,7 +235,7 @@ def format_report(entries: List[dict]) -> str:
             revs = _c(_RED, revs)
 
         staling_str = _fmt_staling(e["staling_seconds"])
-        staling = f"{staling_str:>{C_STAL}}"
+        staling = f"{staling_str:>{C_STALE}}"
         if e["staling_days"] >= 7:
             staling = _c(_RED, staling)
         elif e["staling_days"] >= 3 or e["staling_seconds"] >= 86400:

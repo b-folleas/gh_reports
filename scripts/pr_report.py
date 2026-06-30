@@ -1,16 +1,22 @@
-"""List open PRs authored by you that are approved and ready to merge.
+"""List all open PRs authored by you with a recommended action.
 
 Usage:
-    python to_merge.py
+    python pr_report.py
+
+Action column:
+    TO MERGE   — approved, no conflicts, CI pass/none
+    TO FIX     — has conflicts, CI failing, or changes requested
+    TO NOTIFY  — no approvals and age > 3 days
+    WAIT CI    — approved but CI pending
+    WAITING    — no approvals and age <= 3 days
 
 Columns:
-    Repo, Title, Age, Approvals, Conflicts, CI, URL
+    Action, Project, Title, Age, Reviews, Conflicts, CI, URL
 
 Environment variables:
     GITHUB_TOKEN  (required)
 """
 
-import os
 import unicodedata
 from datetime import datetime, timezone
 from typing import List
@@ -30,6 +36,15 @@ _YELLOW  = "\033[33m"
 _GREEN   = "\033[32m"
 _CYAN    = "\033[36m"
 _MAGENTA = "\033[1;35m"
+
+# Action definitions: (label, sort_priority, color)
+_ACTIONS = {
+    "TO FIX":    (0, _RED),
+    "TO MERGE":  (1, _GREEN),
+    "TO NOTIFY": (2, _YELLOW),
+    "WAIT CI":   (3, _YELLOW),
+    "WAITING":   (4, _DIM),
+}
 
 
 def _c(code: str, text: str) -> str:
@@ -81,17 +96,17 @@ def _get_ci_status(pr) -> str:
 
     if check_runs:
         statuses = [r.conclusion for r in check_runs]
-        # in_progress / queued checks have conclusion=None
         if any(s is None for s in statuses):
             return "pending"
         if all(s in ("success", "skipped", "neutral") for s in statuses):
             return "pass"
         return "fail"
 
-    # Fall back to legacy commit status
     try:
         combined = pr.head.repo.get_commit(sha).get_combined_status()
-        state = combined.state  # "success", "failure", "error", "pending"
+        if combined.total_count == 0:
+            return "none"
+        state = combined.state
         if state == "success":
             return "pass"
         if state == "pending":
@@ -104,8 +119,20 @@ def _get_ci_status(pr) -> str:
     return "none"
 
 
-def fetch_approved_prs(g, username: str):
-    query = f"type:pr author:{username} is:open review:approved"
+def _compute_action(approvals: int, has_conflict: bool, ci_status: str, age_days: int, has_changes_requested: bool = False) -> str:
+    if has_conflict or ci_status == "fail" or has_changes_requested:
+        return "TO FIX"
+    if approvals > 0 and ci_status == "pending":
+        return "WAIT CI"
+    if approvals > 0:
+        return "TO MERGE"
+    if age_days > 3:
+        return "TO NOTIFY"
+    return "WAITING"
+
+
+def fetch_my_open_prs(g, username: str):
+    query = f"type:pr author:{username} is:open"
     print(_c(_DIM, f"Fetching PRs with query: {query}"))
     return g.search_issues(query)
 
@@ -122,19 +149,22 @@ def collect_pr_data(issues, g) -> List[dict]:
         age_seconds = (now - pr.created_at).total_seconds()
         age_days = (now - pr.created_at).days
 
-        # Count distinct approvals (non-bot, latest review per user)
         reviews = list(pr.get_reviews())
         latest_by_user: dict = {}
         for r in reviews:
             if r.user and r.user.type != "Bot":
                 latest_by_user[r.user.login] = r.state
         approvals = sum(1 for s in latest_by_user.values() if s == "APPROVED")
+        has_changes_requested = any(s == "CHANGES_REQUESTED" for s in latest_by_user.values())
+        reviews_done = len(latest_by_user)
+        requested_reviewers = {u.login for u in pr.requested_reviewers if u}
+        total_reviewers = len(set(latest_by_user.keys()) | requested_reviewers)
 
-        # Conflict detection
-        mergeable_state = pr.mergeable_state  # "clean","dirty","blocked","unstable","unknown"
+        mergeable_state = pr.mergeable_state
         has_conflict = mergeable_state == "dirty"
 
         ci_status = _get_ci_status(pr)
+        action = _compute_action(approvals, has_conflict, ci_status, age_days, has_changes_requested)
 
         entries.append({
             "repo": repo_name,
@@ -144,42 +174,44 @@ def collect_pr_data(issues, g) -> List[dict]:
             "age_seconds": age_seconds,
             "age_days": age_days,
             "approvals": approvals,
+            "has_changes_requested": has_changes_requested,
+            "reviews_done": reviews_done,
+            "total_reviewers": total_reviewers,
             "mergeable_state": mergeable_state,
             "has_conflict": has_conflict,
             "ci_status": ci_status,
+            "action": action,
         })
 
-    # Sort: conflicts and CI failures first, then by age descending
-    def sort_key(e):
-        return (not e["has_conflict"], e["ci_status"] not in ("fail",), -e["age_days"])
-
-    entries.sort(key=sort_key)
+    entries.sort(key=lambda e: (_ACTIONS[e["action"]][0], -e["age_days"]))
     return entries
 
 
 def format_report(entries: List[dict]) -> str:
     if not entries:
-        return _c(_YELLOW, "No approved open PRs found.")
+        return _c(_YELLOW, "No open PRs found.")
 
-    C_PROJ  = 22
-    C_TITLE = 36
+    C_ACT   = 10
+    C_PROJ  = 20
+    C_TITLE = 34
     C_AGE   = 6
-    C_APPR  = 5
+    C_REV   = 8
     C_CONF  = 9
     C_CI    = 9
-    SEP = C_PROJ + C_TITLE + C_AGE + C_APPR + C_CONF + C_CI + 6
+    SEP = C_ACT + C_PROJ + C_TITLE + C_AGE + C_REV + C_CONF + C_CI + 7
 
     total = len(entries)
     out = []
     out.append("")
-    out.append(_c(_BOLD, f"  PRs to merge  —  {total} approved open PR(s)"))
+    out.append(_c(_BOLD, f"  My open PRs  —  {total} PR(s)"))
     out.append("─" * SEP)
 
     header = (
+        f"{'Action':<{C_ACT}} "
         f"{'Project':<{C_PROJ}} "
         f"{'Title':<{C_TITLE}} "
         f"{'Age':>{C_AGE}} "
-        f"{'Approvals':>{C_APPR}} "
+        f"{'Reviews':>{C_REV}} "
         f"{'Conflicts':>{C_CONF}} "
         f"{'CI':>{C_CI}}"
     )
@@ -187,9 +219,11 @@ def format_report(entries: List[dict]) -> str:
     out.append("─" * SEP)
 
     for e in entries:
-        proj_raw = _fit(e["repo"].split("/")[-1], C_PROJ)
-        proj = _c(_MAGENTA, proj_raw)
+        action_label = e["action"]
+        action_color = _ACTIONS[action_label][1]
+        action_cell = _c(action_color, _fit(action_label, C_ACT))
 
+        proj = _c(_MAGENTA, _fit(e["repo"].split("/")[-1], C_PROJ))
         title = _fit(e["title"], C_TITLE)
 
         age_str = _fmt_age(e["age_seconds"])
@@ -201,18 +235,22 @@ def format_report(entries: List[dict]) -> str:
         else:
             age = _c(_GREEN, age)
 
-        appr = f"{e['approvals']:>{C_APPR}}"
-        appr = _c(_GREEN, appr)
+        rev_str = f"{e['reviews_done']}/{e['total_reviewers']}"
+        if e["has_changes_requested"]:
+            rev_color = _RED
+        elif e["approvals"] > 0:
+            rev_color = _GREEN
+        else:
+            rev_color = _DIM
+        appr = _c(rev_color, f"{rev_str:>{C_REV}}")
 
-        # Conflicts column
         if e["has_conflict"]:
             conf = _c(_RED, _fit("YES", C_CONF, ">"))
-        elif e["mergeable_state"] == "Unknown":
+        elif e["mergeable_state"] == "unknown":
             conf = _c(_YELLOW, _fit("?", C_CONF, ">"))
         else:
             conf = _c(_GREEN, _fit("No", C_CONF, ">"))
 
-        # CI column
         ci = e["ci_status"]
         if ci == "pass":
             ci_cell = _c(_GREEN, _fit("Pass", C_CI, ">"))
@@ -223,8 +261,10 @@ def format_report(entries: List[dict]) -> str:
         else:
             ci_cell = _c(_DIM, _fit("None", C_CI, ">"))
 
-        out.append(f"{proj} {title} {age} {appr} {conf} {ci_cell}")
+        out.append(f"{action_cell} {proj} {title} {age} {appr} {conf} {ci_cell}")
         out.append(_c(_DIM + _CYAN, f"{'':>{2}}   ↳ {e['url']}"))
+        if e["has_changes_requested"]:
+            out.append(_c(_RED, f"{'':>{2}}   ⚠ Request changes"))
 
     out.append("─" * SEP)
     return "\n".join(out)
@@ -233,9 +273,9 @@ def format_report(entries: List[dict]) -> str:
 def main():
     g = get_github_client()
     username = get_authenticated_username(g)
-    print(_c(_DIM, f"Fetching approved PRs for: {username}"))
+    print(_c(_DIM, f"Fetching open PRs for: {username}"))
 
-    issues = fetch_approved_prs(g, username)
+    issues = fetch_my_open_prs(g, username)
     entries = collect_pr_data(issues, g)
     print(format_report(entries))
 
